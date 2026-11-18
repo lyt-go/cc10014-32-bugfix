@@ -18,15 +18,7 @@ from app.services.schema_registry import SchemaRegistryService
 
 def reset_store():
     """重置内存仓库到初始seed状态。"""
-    from app.seed import SEED_ROWS
-    store._tables = {name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()}
-    store._table_data.clear()
-    store._versions.clear()
-    store._lineage_edges.clear()
-    store._quality_results.clear()
-    store._snapshot_data.clear()
-    store._archive_records.clear()
-    store._backfill_partitions.clear()
+    store.reset()
 
 
 class TestIngestMappingOds:

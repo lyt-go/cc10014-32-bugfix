@@ -1,6 +1,7 @@
 """转换编排 DAG 图服务：支持节点执行时消费上游表数据，写入下游表，并自动生成血缘。"""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from app.store import store
@@ -78,6 +79,63 @@ class TransformDagService:
         g = self.get_graph()
         return g["nodes"], g["edges"]
 
+    # ------------------------------------------------------------------
+    # 跨模块持久化的发布快照版本：转换编排详情页与数据发布看板共用同一份口径
+    # ------------------------------------------------------------------
+    def get_publish_versions(self, entry_id: int) -> dict[str, Any]:
+        """沿节点编号定位发布版本，返回其发布快照版本（由数据发布模块持久化）。"""
+        entry = self.get_entry(entry_id)
+        if entry is None:
+            return {"ok": False, "message": f"转换节点 {entry_id} 不存在", "items": []}
+        node_code = entry.get("节点编号", "")
+        output_table = entry.get("输出表名", "")
+        batches = store.list_transform_batches(node_code)
+        publish_entries = [
+            row for row in store.rows("data_publish")
+            if row.get("来源转换节点") == node_code
+        ]
+        if not publish_entries and output_table:
+            # 老数据只有数据集名称，按输出表名兜底定位，避免详情页读不到发布版本。
+            publish_entries = [
+                row for row in store.rows("data_publish")
+                if row.get("数据集名称") == output_table
+            ]
+        from app.services.data_publish import DataPublishService
+        publisher = DataPublishService()
+        versions = []
+        for publish_entry in publish_entries:
+            for snapshot in publisher.list_versions(int(publish_entry["id"])):
+                versions.append({
+                    **snapshot,
+                    "发布版本id": int(publish_entry["id"]),
+                    "发布版本编号": publish_entry.get("版本编号", ""),
+                    "发布状态": publish_entry.get("status", ""),
+                })
+        # 只保留与当前节点批次相关的版本，避免历史别的节点的版本串到详情页。
+        node_batches = {str(batch.get("batch_no")) for batch in batches}
+        related = [item for item in versions if str(item.get("batch_no")) in node_batches or item.get("batch_no") == "MANUAL"]
+        return {
+            "ok": True,
+            "node_code": node_code,
+            "output_table": output_table,
+            "batches": [
+                {
+                    "batch_no": batch.get("batch_no"),
+                    "status": batch.get("status"),
+                    "integrity": batch.get("integrity", False),
+                    "row_count": batch.get("row_count", 0),
+                }
+                for batch in batches
+            ],
+            "publish_entries": [
+                {"id": int(row["id"]), "版本编号": row.get("版本编号", ""),
+                 "数据集名称": row.get("数据集名称", ""), "status": row.get("status", "")}
+                for row in publish_entries
+            ],
+            "items": related,
+            "total": len(related),
+        }
+
     def execute_node(self, entry_id: int) -> dict[str, Any]:
         """执行转换节点：读取输入表数据，按转换脚本逻辑处理，写入输出表，并自动生成血缘和推导schema。"""
         entry = self.get_entry(entry_id)
@@ -98,19 +156,47 @@ class TransformDagService:
             input_data = store.table_rows(input_table)
         if not input_data:
             return {"ok": False, "message": f"输入表 {input_table} 无数据"}
-        # 简单模拟SQL解析：GROUP BY 聚合
-        output_data = self._execute_script(input_data, script)
-        store.set_table_rows(output_table, output_data)
+        # 每次执行分配独立批次，批次是发布快照唯一的取数口径。
+        batch_no = store.next_transform_batch(entry.get("节点编号", ""))
+        batch = {
+            "batch_no": batch_no,
+            "node_code": entry.get("节点编号", ""),
+            "input_table": input_table,
+            "output_table": output_table,
+            "status": "执行中",
+            "integrity": False,
+            "row_count": 0,
+            "rows": [],
+            "started_at": datetime.now().isoformat(),
+            "completed_at": "",
+        }
+        store.save_transform_batch(batch)
+        try:
+            # 简单模拟SQL解析：GROUP BY 聚合
+            output_data = self._execute_script(input_data, script)
+            if not isinstance(output_data, list):
+                raise ValueError("转换输出不是完整行集")
+            # 先落盘输出表，再把同一批完整行集写入批次；两者行数必须一致。
+            store.set_table_rows(output_table, output_data)
+            store.save_transform_batch({**batch, "status": "已完成", "integrity": True,
+                                        "row_count": len(output_data), "rows": output_data,
+                                        "completed_at": datetime.now().isoformat()})
+        except Exception as exc:  # 事务回滚：半成品批次不允许被发布消费
+            store.save_transform_batch({**batch, "status": "失败", "integrity": False,
+                                        "row_count": 0, "rows": [], "error": str(exc),
+                                        "completed_at": datetime.now().isoformat()})
+            return {"ok": False, "message": f"转换批次 {batch_no} 执行失败：{exc}"}
         # 自动生成血缘
         store.add_lineage(input_table, output_table,
                           field_map=entry.get("节点编号", ""),
                           transform_logic=script,
-                          batch_id=entry.get("节点编号", ""))
+                          batch_id=f"{entry.get('节点编号', '')}#{batch_no}")
         # 自动推导schema变更并注册
         from app.services.schema_registry import SchemaRegistryService
         sch = SchemaRegistryService()
         sch.derive_schema_from_lineage(output_table)
-        return {"ok": True, "message": f"节点执行完成，输出{len(output_data)}行到 {output_table}", "rows": output_data}
+        return {"ok": True, "message": f"节点执行完成，输出{len(output_data)}行到 {output_table}",
+                "rows": output_data, "batch_no": batch_no, "row_count": len(output_data)}
 
     def _execute_script(self, data: list[dict[str, Any]], script: str) -> list[dict[str, Any]]:
         if "GROUP BY" in script.upper():

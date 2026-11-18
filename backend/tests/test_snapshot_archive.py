@@ -14,15 +14,7 @@ from app.services.cold_archive import ColdArchiveService
 
 
 def reset_store():
-    from app.seed import SEED_ROWS
-    store._tables = {name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()}
-    store._table_data.clear()
-    store._versions.clear()
-    store._lineage_edges.clear()
-    store._quality_results.clear()
-    store._snapshot_data.clear()
-    store._archive_records.clear()
-    store._backfill_partitions.clear()
+    store.reset()
 
 
 class TestSnapshotArchive:

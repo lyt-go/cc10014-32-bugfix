@@ -215,7 +215,9 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
          "默认值": ",,,", "定义版本": "v1", "生效批次": "RAW-20261103"},
     ],
     "data_publish": [
-        {"id": 1, "status": "已发布", "pending": False, "abnormal": False,
+        # 初始示例停在待校验：发布快照版本只在“确认发布”时由完整转换批次冻结生成，
+        # 不预置已发布但没有快照的版本，避免列表页与详情页读到对不上的结果。
+        {"id": 1, "status": "待校验", "pending": True, "abnormal": False,
          "版本编号": "PUB-ORD-001", "数据集名称": "dws_order_daily", "发布范围": "内部BI",
          "查询参数": "dt,order_status", "响应字段": "dt,order_status,total_amount,order_count",
          "缓存秒数": "300", "分页上限": "10000", "消费应用": "BI报表", "来源转换节点": "TRAN-ORD-001"},

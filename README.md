@@ -68,6 +68,22 @@ npm run dev
 | 转换编排 | `transform_dag` | 转换节点 | 节点编号、输入表名、输出表名 |
 | 冷热归档 | `cold_archive` | 归档策略 | 策略编号、目标表名、冷数据阈值 |
 
+## 发布快照版本
+
+`数据发布` 的“确认发布”会把来源转换节点的**完整转换批次**冻结成一个发布快照版本，
+而不是引用实时表：
+
+- 每次执行转换都会分配独立批次号；批次带 `integrity` 标记，行数、冻结内容必须一致才算完整。
+- 发布只在批次完整时生效；批次未完成时保留上一完整结果，并记录 `待发布转换批次`。
+- 快照版本冻结发布当时的行数与查询字段（`查询参数`），之后转换再次执行只形成新版本，历史版本不变。
+- 同一完整批次重复提交只生效一次；发布快照版本归属冲突直接拒绝。
+- 接口：
+  - `GET /api/data_publish/{id}/versions`、`GET .../versions/{n}`
+  - `GET .../versions/{n}/export`（CSV）、`GET .../versions/{n}/package`（ZIP：CSV + manifest）
+  - `POST .../versions/{n}/bookmark`、`GET /api/data_publish/downloads/{token}`（下载书签）
+  - `GET .../versions/{n}/handoff`（文件交接：发布版本 → 转换节点 → 批次 → 快照版本）
+  - `GET /api/transform_dag/{id}/publish-versions`（转换编排详情页核对发布版本结果）
+
 ## 约定
 
 - 每个模块的前端页面在 `frontend/src/views/<模块>/index.vue`，后端接口在

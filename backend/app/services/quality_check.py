@@ -64,8 +64,8 @@ class QualityCheckService:
         store.save_version(MODULE, entry_id, entry)
         return entry, f"稽核规则已{action}"
 
-    def execute_check(self, entry_id: int) -> dict[str, Any]:
-        """读取目标表数据，执行校验表达式，返回稽核结果。"""
+    def execute_check(self, entry_id: int, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        """读取目标表数据（或调用方给定的完整批次行），执行校验表达式，返回稽核结果。"""
         entry = self.get_entry(entry_id)
         if not entry:
             return {"ok": False, "message": "稽核规则不存在"}
@@ -74,13 +74,15 @@ class QualityCheckService:
         expr = entry.get("校验表达式", "")
         lower = entry.get("阈值下界", "")
         upper = entry.get("阈值上界", "")
-        # 读取表数据
-        rows = store.table_rows(table)
-        if not rows:
-            # 尝试从ODS读取
-            from app.services.ods_layer import OdsLayerService
-            ods = OdsLayerService()
-            rows = ods.get_table_data(table)
+        # 调用方给了完整批次就按批次校验（即使是空批次也照实校验），
+        # 避免发布时口径漂移到实时表。
+        if rows is None:
+            rows = store.table_rows(table)
+            if not rows:
+                # 尝试从ODS读取
+                from app.services.ods_layer import OdsLayerService
+                ods = OdsLayerService()
+                rows = ods.get_table_data(table)
         total = len(rows)
         failed = 0
         failed_rows: list[dict[str, Any]] = []

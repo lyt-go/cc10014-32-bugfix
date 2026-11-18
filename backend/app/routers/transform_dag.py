@@ -71,6 +71,15 @@ def run_action(entry_id: int, payload: ActionPayload) -> ActionResult:
 
 @router.post("/{entry_id}/execute")
 def execute_node(entry_id: int) -> dict[str, Any]:
-    """执行转换节点：消费上游表数据，写入下游表，自动生成血缘。"""
+    """执行转换节点：消费上游表数据，写入下游表，自动生成血缘与独立转换批次。"""
     result = service.execute_node(entry_id)
     return result
+
+
+@router.get("/{entry_id}/publish-versions")
+def get_publish_versions(entry_id: int) -> dict[str, Any]:
+    """转换编排详情页核对发布版本结果：返回该节点关联的发布快照版本与批次。"""
+    data = service.get_publish_versions(entry_id)
+    if not data.get("ok"):
+        raise HTTPException(status_code=404, detail=data.get("message", "转换节点不存在"))
+    return data
